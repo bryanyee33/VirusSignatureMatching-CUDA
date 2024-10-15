@@ -4,13 +4,17 @@
 #define SAMPLE_MAX_LEN 200000
 #define SIGNATURE_MAX_LEN 10000
 
-__global__ void getMatches(const char* __restrict d_sample_seq, const char* __restrict d_sample_qual,
-        const char* __restrict d_signature_seq) {
+__global__ void getMatches(const char* __restrict d_sample_seq, const char* __restrict d_sample_qual, const char* __restrict d_signature_seq,
+        double* __restrict match_scores, unsigned short* __restrict match_idx, int* __restrict match_count) {
 
     const char *sample = &d_sample_seq[SAMPLE_MAX_LEN * blockIdx.x];
     const char *signature = &d_signature_seq[SIGNATURE_MAX_LEN * threadIdx.x];
 
     for (int i = 0; i < SAMPLE_MAX_LEN; ++i) {
+        if (!sample[i]) { // Sample ended; no match
+            return;
+        }
+
         for (int j = 0; j < SIGNATURE_MAX_LEN; ++j) {
             if (!signature[j]) { // Signature ended; found match
                 const char *qual = &d_sample_qual[SAMPLE_MAX_LEN * blockIdx.x + i];
@@ -18,32 +22,20 @@ __global__ void getMatches(const char* __restrict d_sample_seq, const char* __re
                 for (int s = 0; s < j; ++s) {
                     tot += qual[s] - 33;
                 }
-                
-                printf("Sample: %d, Sig: %d, Avg: %f\n", blockIdx.x, threadIdx.x, (float)tot/j);
-                break;
+
+                int idx = atomicAdd(match_count, 1); // Each idx will be unique (no need synchronisation)
+                match_scores[idx] = (double)tot / j;
+                match_idx[idx << 1] = blockIdx.x; // Sample idx
+                match_idx[(idx << 1) + 1] = threadIdx.x; // Signature idx
+                return;
+
             } else if (!sample[i + j] || sample[i + j] != 'N' && signature[j] != 'N' &&
                     sample[i + j] != signature[j]) { // No match
                 break;
             }
         }
+        // __syncthreads();
     }
-    // const int id = threadIdx.x + blockIdx.x * blockDim.x;
-
-    // __shared__ unsigned long long data[BLOCK_SIZE];
-
-    // data[threadIdx.x] = input[id];
-    // __syncthreads();
-
-    // for (int i = 1; i < 256; i <<= 1) {
-    //     if (threadIdx.x % (i << 1) == 0) {
-    //         data[threadIdx.x] += data[threadIdx.x + i];
-    //     }
-    //     __syncthreads();
-    // }
-
-    // if (threadIdx.x == 0) {
-    //     atomicAdd(&dResult, data[0]);
-    // }
 }
 
 void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klibpp::KSeq>& signatures, std::vector<MatchResult>& matches) {
@@ -55,6 +47,15 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
     char *h_sample_qual = (char*)calloc(sample_arr_len, sizeof(char));
     char *h_signature_seq = (char*)calloc(signature_arr_len, sizeof(char));
 
+    // Device variables
+    char *d_sample_seq, *d_sample_qual, *d_signature_seq;
+    int *match_count; // 1 int storing the number of matches
+
+    // Pinned memory in host
+    double *match_scores;      // [Score_1, Score2, ...]
+    unsigned short *match_idx; // [Samp_idx_1, Sig_idx_1, Samp_idx_2, Sig_idx_2, ...]
+
+    // Combine each string array into 1 for transfer
     for (int i = 0; i < samples.size(); ++i) {
         memcpy(&h_sample_seq[i * SAMPLE_MAX_LEN], &samples[i].seq[0], samples[i].seq.size());
         memcpy(&h_sample_qual[i * SAMPLE_MAX_LEN], &samples[i].qual[0], samples[i].qual.size());
@@ -62,30 +63,35 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
     for (int i = 0; i < signatures.size(); ++i) {
         memcpy(&h_signature_seq[i * SIGNATURE_MAX_LEN], &signatures[i].seq[0], signatures[i].seq.size());
     }
-    
-    char *d_sample_seq, *d_sample_qual, *d_signature_seq;
 
-    cudaMallocManaged(&d_sample_seq, sample_arr_len);
-    cudaMallocManaged(&d_sample_qual, sample_arr_len);
+    // Use cudaMallocHost() to write straight to host, since only a small number of matches should be found
+    cudaMallocHost(&match_scores, sizeof(double) * samples.size() * signatures.size()); // Max possible number of matches
+    cudaMallocHost(&match_idx, sizeof(unsigned short) * 2 * samples.size() * signatures.size());
+
+    // Test out zero-copy memory
+    // cudaHostAlloc(&match_scores, sizeof(double) * samples.size() * signatures.size(), cudaHostAllocMapped); // Max possible number of matches
+    // cudaHostAlloc(&match_idx, sizeof(unsigned short) * 2 * samples.size() * signatures.size(), cudaHostAllocMapped);
+    cudaMalloc(&match_count, sizeof(int));
+    cudaMemset(match_count, 0, 1); // Initialise match_count to 0
+
+    cudaMalloc(&d_sample_seq, sample_arr_len);
+    cudaMalloc(&d_sample_qual, sample_arr_len);
+    cudaMalloc(&d_signature_seq, signature_arr_len);
     cudaMemcpy(d_sample_seq, h_sample_seq, sample_arr_len, cudaMemcpyHostToDevice);
     cudaMemcpy(d_sample_qual, h_sample_qual, sample_arr_len, cudaMemcpyHostToDevice);
-
-    cudaMallocManaged(&d_signature_seq, signature_arr_len);
     cudaMemcpy(d_signature_seq, h_signature_seq, signature_arr_len, cudaMemcpyHostToDevice);
 
-    getMatches<<<samples.size(), signatures.size()>>>(d_sample_seq, d_sample_qual, d_signature_seq);
+    // 1 Sample per block; Each thread in block corresponds to 1 signature
+    getMatches<<<samples.size(), signatures.size()>>>(d_sample_seq, d_sample_qual, d_signature_seq, match_scores, match_idx, match_count);
+    cudaDeviceSynchronize();
 
-    // unsigned long long result = 0.0f;
-    // // Run several iterations to get an average measurement
-    // for (unsigned long long i = 0; i < TIMING_ITERATIONS; i++)
-    // {
-    //     // Reset acummulated result to 0 in each run
-    //     cudaMemcpyToSymbol(dResult, &result, sizeof(unsigned long long));
-    //     func<<<gridDim, blockDim>>>(dValsPtr, N);
-    // }
-
-    // // cudaMemcpyFromSymbol will implicitly synchronize CPU and GPU
-    // cudaMemcpyFromSymbol(&result, dResult, sizeof(unsigned long long));
+    int h_match_count;
+    cudaMemcpy(&h_match_count, match_count, sizeof(int), cudaMemcpyDeviceToHost);
+    for (int i = 0; i < h_match_count; ++i) {
+        matches.emplace_back(MatchResult(samples[match_idx[i << 1]].name,
+                             signatures[match_idx[(i << 1) + 1]].name,
+                             match_scores[i]));
+    }
 
     cudaFree(d_sample_seq);
     cudaFree(d_sample_qual);
