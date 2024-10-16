@@ -8,12 +8,12 @@
 
 ## Request for a specific type of node
 ## Commented out for now, change if you need one
-##SBATCH --constraint=xgph
-#SBATCH --constraint=xgpi
-
 ## gpu:1 ==> any gpu. For e.g., --gres=gpu:a100-40:1 gets you one of the A100 GPU shared instances
-##SBATCH --gpus=a100-40
-#SBATCH --gpus=h100-96
+
+#SBATCH --constraint=xgph
+#SBATCH --gpus=a100-40
+##SBATCH --gpus=h100-96
+##SBATCH --constraint=xgpi
 
 ## Must change this based on how long job will take. We are just expecting 30 seconds for now
 #SBATCH --time=00:10:00
@@ -46,9 +46,16 @@ echo -e "\n====> Compiling...\n"
 make
 
 echo -e "\n====> Running...\n"
-./matcher samp_100%.fastq sig.fasta
+# nsys profile --stats=true ./matcher samp_100%.fastq sig.fasta
+# ./matcher samp_100%.fastq sig.fasta
 # ./bench-a100 samp_100%.fastq sig.fasta
-./bench-h100 samp_100%.fastq sig.fasta
+# ./bench-h100 samp_100%.fastq sig.fasta
+
+# ./matcher samp_200%.fastq sig_100%.fasta
+# ./bench-a100 samp_200%.fastq sig_100%.fasta
+
+./matcher samp.fastq sig.fasta
+./bench-a100 samp.fastq sig.fasta
 
 echo -e "\n====> Finished running.\n"
 
