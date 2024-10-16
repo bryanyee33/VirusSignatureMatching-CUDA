@@ -46,16 +46,20 @@ echo -e "\n====> Compiling...\n"
 make
 
 echo -e "\n====> Running...\n"
-# nsys profile --stats=true ./matcher samp_100%.fastq sig.fasta
+nsys profile --stats=true ./matcher samp_100%.fastq sig.fasta
+
 # ./matcher samp_100%.fastq sig.fasta
 # ./bench-a100 samp_100%.fastq sig.fasta
 # ./bench-h100 samp_100%.fastq sig.fasta
 
 # ./matcher samp_200%.fastq sig_100%.fasta
 # ./bench-a100 samp_200%.fastq sig_100%.fasta
+# ./bench-h100 samp_200%.fastq sig_100%.fasta
 
-./matcher samp.fastq sig.fasta
-./bench-a100 samp.fastq sig.fasta
+# ./matcher samp.fastq sig.fasta
+# ./bench-a100 samp.fastq sig.fasta
+# ./bench-h100 samp.fastq sig.fasta
+
 
 echo -e "\n====> Finished running.\n"
 

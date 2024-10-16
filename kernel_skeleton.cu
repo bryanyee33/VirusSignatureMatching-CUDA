@@ -38,6 +38,11 @@ __global__ void getMatches(const char* __restrict d_sample_seq, const char* __re
 }
 
 void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klibpp::KSeq>& signatures, std::vector<MatchResult>& matches) {
+    cudaStream_t stream1, stream2, stream3;
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    cudaStreamCreate(&stream3);
+
     int sample_arr_len = samples.size() * SAMPLE_MAX_LEN;
     int signature_arr_len = signatures.size() * SIGNATURE_MAX_LEN;
 
@@ -49,8 +54,13 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
     // Device variables
     char *d_sample_seq, *d_sample_qual, *d_signature_seq;
     int *match_count; // 1 int storing the number of matches
+    cudaMallocAsync(&d_sample_seq, sample_arr_len, stream1);
+    cudaMallocAsync(&d_sample_qual, sample_arr_len, stream2);
+    cudaMallocAsync(&d_signature_seq, signature_arr_len, stream3);
+    cudaMallocAsync(&match_count, sizeof(int), stream3);
+    cudaMemsetAsync(match_count, 0, 1, stream3); // Initialise match_count to 0
 
-    // Pinned memory in host
+    // Pinned memory
     double *match_scores;      // [Score_1, Score2, ...]
     unsigned short *match_idx; // [Samp_idx_1, Sig_idx_1, Samp_idx_2, Sig_idx_2, ...]
 
@@ -58,44 +68,48 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
     for (int i = 0; i < signatures.size(); ++i) {
         memcpy(&h_signature_seq[i * SIGNATURE_MAX_LEN], &signatures[i].seq[0], signatures[i].seq.size());
     }
+    cudaMemcpyAsync(d_signature_seq, h_signature_seq, signature_arr_len, cudaMemcpyHostToDevice, stream3);
     for (int i = 0; i < samples.size(); ++i) {
         memcpy(&h_sample_seq[i * SAMPLE_MAX_LEN], &samples[i].seq[0], samples[i].seq.size());
+    }
+    cudaMemcpyAsync(d_sample_seq, h_sample_seq, sample_arr_len, cudaMemcpyHostToDevice, stream1);
+    for (int i = 0; i < samples.size(); ++i) {
         memcpy(&h_sample_qual[i * SAMPLE_MAX_LEN], &samples[i].qual[0], samples[i].qual.size());
     }
+    cudaMemcpyAsync(d_sample_qual, h_sample_qual, sample_arr_len, cudaMemcpyHostToDevice, stream2);
+    
 
     // Use cudaMallocHost() to write straight to host, since only a small number of matches should be found
     cudaMallocHost(&match_scores, sizeof(double) * samples.size() * signatures.size()); // Max possible number of matches
     cudaMallocHost(&match_idx, sizeof(unsigned short) * 2 * samples.size() * signatures.size());
-
     // Test out zero-copy memory
     // cudaHostAlloc(&match_scores, sizeof(double) * samples.size() * signatures.size(), cudaHostAllocMapped); // Max possible number of matches
     // cudaHostAlloc(&match_idx, sizeof(unsigned short) * 2 * samples.size() * signatures.size(), cudaHostAllocMapped);
-    cudaMalloc(&match_count, sizeof(int));
-    cudaMemset(match_count, 0, 1); // Initialise match_count to 0
-
-    cudaMalloc(&d_sample_seq, sample_arr_len);
-    cudaMalloc(&d_sample_qual, sample_arr_len);
-    cudaMalloc(&d_signature_seq, signature_arr_len);
-    cudaMemcpy(d_sample_seq, h_sample_seq, sample_arr_len, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_sample_qual, h_sample_qual, sample_arr_len, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_signature_seq, h_signature_seq, signature_arr_len, cudaMemcpyHostToDevice);
+    
 
     // 1 Sample per block; Each thread in block corresponds to 1 signature
     getMatches<<<samples.size(), signatures.size()>>>(d_sample_seq, d_sample_qual, d_signature_seq, match_scores, match_idx, match_count);
-    cudaDeviceSynchronize();
-
-    int h_match_count;
-    cudaMemcpy(&h_match_count, match_count, sizeof(int), cudaMemcpyDeviceToHost);
-    for (int i = 0; i < h_match_count; ++i) {
-        matches.emplace_back(MatchResult(samples[match_idx[i << 1]].name,
-                             signatures[match_idx[(i << 1) + 1]].name,
-                             match_scores[i]));
-    }
-
-    cudaFree(d_sample_seq);
-    cudaFree(d_sample_qual);
-    cudaFree(d_signature_seq);
+    // free() right after async getMatches() launch, since they are only needed for copy
     free(h_sample_seq);
     free(h_sample_qual);
     free(h_signature_seq);
+
+    int h_match_count; // Number of matches after getMatches() is done
+    cudaMemcpy(&h_match_count, match_count, sizeof(int), cudaMemcpyDeviceToHost);
+    cudaFreeAsync(match_count, stream3);
+    cudaFreeAsync(d_sample_seq, stream1);
+    cudaFreeAsync(d_sample_qual, stream2);
+    cudaFreeAsync(d_signature_seq, stream3);
+
+    for (int i = 0; i < h_match_count; ++i) {
+        matches.emplace_back(MatchResult(samples[match_idx[i << 1]].name,
+                                         signatures[match_idx[(i << 1) + 1]].name,
+                                         match_scores[i]));
+    }
+    
+    cudaFreeHost(match_scores);
+    cudaFreeHost(match_idx);
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream3);
 }
