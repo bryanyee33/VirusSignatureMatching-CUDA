@@ -46,18 +46,17 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
     int sample_arr_len = samples.size() * SAMPLE_MAX_LEN;
     int signature_arr_len = signatures.size() * SIGNATURE_MAX_LEN;
 
+    // calloc() to initialise all to '\0'; set to max possible length for each type.
+    char *h_sample_seq = (char*)calloc(sample_arr_len, sizeof(char));
+    char *h_sample_qual = (char*)calloc(sample_arr_len, sizeof(char));
+    char *h_signature_seq = (char*)calloc(signature_arr_len, sizeof(char));
+
     // Device variables
     char *d_sample_seq, *d_sample_qual, *d_signature_seq;
     int *match_count; // 1 int storing the number of matches
     cudaMallocAsync(&d_sample_seq, sample_arr_len, stream1);
-    cudaMemsetAsync(d_sample_seq, 0, sample_arr_len, stream1); // Initialise arrays to '\0'
-
     cudaMallocAsync(&d_sample_qual, sample_arr_len, stream2);
-    cudaMemsetAsync(d_sample_qual, 0, sample_arr_len, stream2);
-
     cudaMallocAsync(&d_signature_seq, signature_arr_len, stream3);
-    cudaMemsetAsync(d_signature_seq, 0, signature_arr_len, stream3);
-
     cudaMallocAsync(&match_count, sizeof(int), stream3);
     cudaMemsetAsync(match_count, 0, 1, stream3); // Initialise match_count to 0
 
@@ -65,13 +64,19 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
     double *match_scores;      // [Score_1, Score2, ...]
     unsigned short *match_idx; // [Samp_idx_1, Sig_idx_1, Samp_idx_2, Sig_idx_2, ...]
 
+    // Combine each string array into 1 for transfer
     for (int i = 0; i < signatures.size(); ++i) {
-        cudaMemcpyAsync(&d_signature_seq[i * SIGNATURE_MAX_LEN], signatures[i].seq.c_str(), signatures[i].seq.size(), cudaMemcpyHostToDevice, stream3);
+        memcpy(&h_signature_seq[i * SIGNATURE_MAX_LEN], &signatures[i].seq[0], signatures[i].seq.size());
     }
+    cudaMemcpyAsync(d_signature_seq, h_signature_seq, signature_arr_len, cudaMemcpyHostToDevice, stream3);
     for (int i = 0; i < samples.size(); ++i) {
-        cudaMemcpyAsync(&d_sample_seq[i * SAMPLE_MAX_LEN], samples[i].seq.c_str(), samples[i].seq.size(), cudaMemcpyHostToDevice, stream1);
-        cudaMemcpyAsync(&d_sample_qual[i * SAMPLE_MAX_LEN], samples[i].qual.c_str(), samples[i].qual.size(), cudaMemcpyHostToDevice, stream2);
+        memcpy(&h_sample_seq[i * SAMPLE_MAX_LEN], &samples[i].seq[0], samples[i].seq.size());
     }
+    cudaMemcpyAsync(d_sample_seq, h_sample_seq, sample_arr_len, cudaMemcpyHostToDevice, stream1);
+    for (int i = 0; i < samples.size(); ++i) {
+        memcpy(&h_sample_qual[i * SAMPLE_MAX_LEN], &samples[i].qual[0], samples[i].qual.size());
+    }
+    cudaMemcpyAsync(d_sample_qual, h_sample_qual, sample_arr_len, cudaMemcpyHostToDevice, stream2);
     
 
     // Use cudaMallocHost() to write straight to host, since only a small number of matches should be found
@@ -84,6 +89,10 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 
     // 1 Sample per block; Each thread in block corresponds to 1 signature
     getMatches<<<samples.size(), signatures.size()>>>(d_sample_seq, d_sample_qual, d_signature_seq, match_scores, match_idx, match_count);
+    // free() right after async getMatches() launch, since they are only needed for copy
+    free(h_sample_seq);
+    free(h_sample_qual);
+    free(h_signature_seq);
 
     int h_match_count; // Number of matches after getMatches() is done
     cudaMemcpy(&h_match_count, match_count, sizeof(int), cudaMemcpyDeviceToHost);

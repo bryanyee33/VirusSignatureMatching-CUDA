@@ -16,7 +16,7 @@
 ##SBATCH --constraint=xgpi
 
 ## Must change this based on how long job will take. We are just expecting 30 seconds for now
-#SBATCH --time=00:10:00
+#SBATCH --time=00:30:00
 
 ## Probably no need to change anything here
 #SBATCH --ntasks=1
@@ -43,10 +43,10 @@ echo "Job is running on $(hostname), started at $(date)"
 # Actually compile the code
 echo -e "\n====> Compiling...\n"
 # $NVCC -arch native -O3 --std=c++17 -o sum sum.cu
-make
+make clean && make
 
 echo -e "\n====> Running...\n"
-nsys profile --stats=true ./matcher samp_100%.fastq sig.fasta
+# nsys profile --stats=true ./matcher samp_100%.fastq sig.fasta
 
 # ./matcher samp_100%.fastq sig.fasta
 # ./bench-a100 samp_100%.fastq sig.fasta
@@ -59,6 +59,56 @@ nsys profile --stats=true ./matcher samp_100%.fastq sig.fasta
 # ./matcher samp.fastq sig.fasta
 # ./bench-a100 samp.fastq sig.fasta
 # ./bench-h100 samp.fastq sig.fasta
+
+
+# COMBINE ARRAYS
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_arraycombine samp.fastq sig.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_noarraycombine samp.fastq sig.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_arraycombine_noasync samp.fastq sig.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_noarraycombine_noasync samp.fastq sig.fasta
+# done
+
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_arraycombine samp_fullseq.fastq sig_fullseq.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_noarraycombine samp_fullseq.fastq sig_fullseq.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_arraycombine_noasync samp_fullseq.fastq sig_fullseq.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_noarraycombine_noasync samp_fullseq.fastq sig_fullseq.fasta
+# done
+
+
+# RETRIEVE RESULT
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_simplest samp.fastq sig.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_nocalc samp.fastq sig.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_calc samp.fastq sig.fasta
+# done
+
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_simplest samp_fullmatch.fastq sig_fullseq.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_nocalc samp_fullmatch.fastq sig_fullseq.fasta
+# done
+# for (( i=0; i<5; i=i+1 )) do
+#     ./match_calc samp_fullmatch.fastq sig_fullseq.fasta
+# done
 
 
 echo -e "\n====> Finished running.\n"

@@ -38,41 +38,35 @@ __global__ void getMatches(const char* __restrict d_sample_seq, const char* __re
 }
 
 void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klibpp::KSeq>& signatures, std::vector<MatchResult>& matches) {
-    cudaStream_t stream1, stream2, stream3;
-    cudaStreamCreate(&stream1);
-    cudaStreamCreate(&stream2);
-    cudaStreamCreate(&stream3);
-
     int sample_arr_len = samples.size() * SAMPLE_MAX_LEN;
     int signature_arr_len = signatures.size() * SIGNATURE_MAX_LEN;
 
     // Device variables
     char *d_sample_seq, *d_sample_qual, *d_signature_seq;
     int *match_count; // 1 int storing the number of matches
-    cudaMallocAsync(&d_sample_seq, sample_arr_len, stream1);
-    cudaMemsetAsync(d_sample_seq, 0, sample_arr_len, stream1); // Initialise arrays to '\0'
+    cudaMalloc(&d_sample_seq, sample_arr_len);
+    cudaMemset(d_sample_seq, 0, sample_arr_len); // Initialise arrays to '\0'
 
-    cudaMallocAsync(&d_sample_qual, sample_arr_len, stream2);
-    cudaMemsetAsync(d_sample_qual, 0, sample_arr_len, stream2);
+    cudaMalloc(&d_sample_qual, sample_arr_len);
+    cudaMemset(d_sample_qual, 0, sample_arr_len);
 
-    cudaMallocAsync(&d_signature_seq, signature_arr_len, stream3);
-    cudaMemsetAsync(d_signature_seq, 0, signature_arr_len, stream3);
+    cudaMalloc(&d_signature_seq, signature_arr_len);
+    cudaMemset(d_signature_seq, 0, signature_arr_len);
 
-    cudaMallocAsync(&match_count, sizeof(int), stream3);
-    cudaMemsetAsync(match_count, 0, 1, stream3); // Initialise match_count to 0
+    cudaMalloc(&match_count, sizeof(int));
+    cudaMemset(match_count, 0, 1); // Initialise match_count to 0
 
     // Pinned memory
     double *match_scores;      // [Score_1, Score2, ...]
     unsigned short *match_idx; // [Samp_idx_1, Sig_idx_1, Samp_idx_2, Sig_idx_2, ...]
 
-    for (int i = 0; i < signatures.size(); ++i) {
-        cudaMemcpyAsync(&d_signature_seq[i * SIGNATURE_MAX_LEN], signatures[i].seq.c_str(), signatures[i].seq.size(), cudaMemcpyHostToDevice, stream3);
-    }
     for (int i = 0; i < samples.size(); ++i) {
-        cudaMemcpyAsync(&d_sample_seq[i * SAMPLE_MAX_LEN], samples[i].seq.c_str(), samples[i].seq.size(), cudaMemcpyHostToDevice, stream1);
-        cudaMemcpyAsync(&d_sample_qual[i * SAMPLE_MAX_LEN], samples[i].qual.c_str(), samples[i].qual.size(), cudaMemcpyHostToDevice, stream2);
+        cudaMemcpy(&d_sample_seq[i * SAMPLE_MAX_LEN], samples[i].seq.c_str(), samples[i].seq.size(), cudaMemcpyHostToDevice);
+        cudaMemcpy(&d_sample_qual[i * SAMPLE_MAX_LEN], samples[i].qual.c_str(), samples[i].qual.size(), cudaMemcpyHostToDevice);
     }
-    
+    for (int i = 0; i < signatures.size(); ++i) {
+        cudaMemcpy(&d_signature_seq[i * SIGNATURE_MAX_LEN], signatures[i].seq.c_str(), signatures[i].seq.size(), cudaMemcpyHostToDevice);
+    }
 
     // Use cudaMallocHost() to write straight to host, since only a small number of matches should be found
     cudaMallocHost(&match_scores, sizeof(double) * samples.size() * signatures.size()); // Max possible number of matches
@@ -87,10 +81,10 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
 
     int h_match_count; // Number of matches after getMatches() is done
     cudaMemcpy(&h_match_count, match_count, sizeof(int), cudaMemcpyDeviceToHost);
-    cudaFreeAsync(match_count, stream3);
-    cudaFreeAsync(d_sample_seq, stream1);
-    cudaFreeAsync(d_sample_qual, stream2);
-    cudaFreeAsync(d_signature_seq, stream3);
+    cudaFree(match_count);
+    cudaFree(d_sample_seq);
+    cudaFree(d_sample_qual);
+    cudaFree(d_signature_seq);
 
     for (int i = 0; i < h_match_count; ++i) {
         matches.emplace_back(MatchResult(samples[match_idx[i << 1]].name,
@@ -100,7 +94,4 @@ void runMatcher(const std::vector<klibpp::KSeq>& samples, const std::vector<klib
     
     cudaFreeHost(match_scores);
     cudaFreeHost(match_idx);
-    cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
-    cudaStreamDestroy(stream3);
 }
